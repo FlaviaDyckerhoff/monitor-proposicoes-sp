@@ -1,0 +1,14 @@
+{
+  "name": "monitor-proposicoes-sp",
+  "version": "1.0.0",
+  "description": "Monitor automático de proposições da ALESP-SP",
+  "main": "monitor.js",
+  "scripts": {
+    "start": "node monitor.js"
+  },
+  "dependencies": {
+    "adm-zip": "^0.5.10",
+    "@xmldom/xmldom": "^0.9.5",
+    "nodemailer": "^6.9.14"
+  }
+}
