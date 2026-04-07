@@ -9,6 +9,7 @@
   "dependencies": {
     "adm-zip": "^0.5.10",
     "@xmldom/xmldom": "^0.9.5",
+    "iconv-lite": "^0.6.3",
     "nodemailer": "^6.9.14"
   }
 }
