@@ -38,7 +38,8 @@ function extrairXmlDoZip(zipBuffer) {
   const xmlEntry = entries.find(e => e.entryName.toLowerCase().endsWith('.xml'));
   if (!xmlEntry) throw new Error('Nenhum arquivo XML encontrado no ZIP');
   console.log(`📄 Usando arquivo: ${xmlEntry.entryName}`);
-  return xmlEntry.getData().toString('latin1');
+  const iconv = require('iconv-lite');
+  return iconv.decode(xmlEntry.getData(), 'latin1');
 }
 
 function getText(node, tagName) {
@@ -72,8 +73,9 @@ function descobrirTagItem(doc) {
 //   <idNatureza>, <sgNatureza>, <nmNatureza>
 async function carregarNaturezas() {
   try {
+    const iconv = require('iconv-lite');
     const buf = await baixarBuffer(URL_NATUREZAS);
-    const xmlStr = buf.toString('latin1');
+    const xmlStr = iconv.decode(buf, 'latin1');
     const parser = new DOMParser();
     const doc = parser.parseFromString(xmlStr, 'text/xml');
 
