@@ -38,12 +38,7 @@ function extrairXmlDoZip(zipBuffer) {
   const xmlEntry = entries.find(e => e.entryName.toLowerCase().endsWith('.xml'));
   if (!xmlEntry) throw new Error('Nenhum arquivo XML encontrado no ZIP');
   console.log(`📄 Usando arquivo: ${xmlEntry.entryName}`);
-  const iconv = require('iconv-lite');
-  // Converte ISO-8859-1 → string JS (UTF-16 internamente)
-  // Remove a declaração de encoding para o parser não re-interpretar como latin1
-  return iconv.decode(xmlEntry.getData(), 'ISO-8859-1')
-    .replace(/encoding="ISO-8859-1"/i, 'encoding="UTF-8"')
-    .replace(/encoding='ISO-8859-1'/i, "encoding='UTF-8'");
+  return xmlEntry.getData().toString('utf8');
 }
 
 function getText(node, tagName) {
@@ -77,11 +72,8 @@ function descobrirTagItem(doc) {
 //   <idNatureza>, <sgNatureza>, <nmNatureza>
 async function carregarNaturezas() {
   try {
-    const iconv = require('iconv-lite');
     const buf = await baixarBuffer(URL_NATUREZAS);
-    const xmlStr = iconv.decode(buf, 'ISO-8859-1')
-      .replace(/encoding="ISO-8859-1"/i, 'encoding="UTF-8"')
-      .replace(/encoding='ISO-8859-1'/i, "encoding='UTF-8'");
+    const xmlStr = buf.toString('utf8');
     const parser = new DOMParser();
     const doc = parser.parseFromString(xmlStr, 'text/xml');
 
