@@ -301,14 +301,22 @@ function parsearListagemProposicoes(html, tipoFallback, anoFiltro) {
 async function carregarProposicoesListagem(ano) {
   const tipos = [
     ['1', 'Projeto de Lei'],
-    ['2', 'Projeto de Lei Complementar'],
-    ['3', 'Projeto de Resolução'],
-    ['4', 'Projeto de Decreto Legislativo'],
-    ['5', 'Proposta de Emenda à Constituição'],
-    ['6', 'Moção'],
-    ['7', 'Requerimento'],
-    ['8', 'Requerimento de Informação'],
     ['9', 'Indicação'],
+    ['4005', 'Emendas e Substitutivos'],
+    ['4001', 'Anexos'],
+    ['2', 'Projeto de Lei Complementar'],
+    ['6', 'Moção'],
+    ['4000', 'Parecer'],
+    ['18', 'Autógrafo'],
+    ['5', 'Proposta de Emenda à Constituição'],
+    ['7', 'Requerimento'],
+    ['108', 'Proposta de Alteração (Governador)'],
+    ['19', 'Ofício'],
+    ['4', 'Projeto de Decreto Legislativo'],
+    ['8', 'Requerimento de Informação'],
+    ['47', 'Mensagem Aditiva'],
+    ['4002', 'Veto'],
+    ['3', 'Projeto de Resolução'],
   ];
 
   const todas = [];
