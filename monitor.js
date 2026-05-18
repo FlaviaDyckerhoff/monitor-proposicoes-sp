@@ -24,13 +24,19 @@ function salvarEstado(estado) {
   fs.writeFileSync(ARQUIVO_ESTADO, JSON.stringify(estado, null, 2));
 }
 
-async function baixarBuffer(url) {
+async function baixarBuffer(url, timeoutMs = 30000) {
   console.log(`📥 Baixando ${url}...`);
-  const response = await fetch(url);
-  if (!response.ok) throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-  const buffer = await response.arrayBuffer();
-  console.log(`✅ Baixado: ${(buffer.byteLength / 1024).toFixed(0)} KB`);
-  return Buffer.from(buffer);
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(url, { signal: controller.signal });
+    if (!response.ok) throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+    const buffer = await response.arrayBuffer();
+    console.log(`✅ Baixado: ${(buffer.byteLength / 1024).toFixed(0)} KB`);
+    return Buffer.from(buffer);
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 function extrairXmlDoZip(zipBuffer) {
