@@ -2,6 +2,7 @@ const fs = require('fs');
 const { DOMParser } = require('@xmldom/xmldom');
 const AdmZip = require('adm-zip');
 const nodemailer = require('nodemailer');
+const iconv = require('iconv-lite');
 
 const EMAIL_DESTINO = process.env.EMAIL_DESTINO;
 const EMAIL_REMETENTE = process.env.EMAIL_REMETENTE;
@@ -10,6 +11,7 @@ const ARQUIVO_ESTADO = 'estado.json';
 
 const URL_PROPOSITURAS = 'https://www.al.sp.gov.br/repositorioDados/processo_legislativo/proposituras.zip';
 const URL_NATUREZAS   = 'https://www.al.sp.gov.br/repositorioDados/processo_legislativo/naturezasSpl.xml';
+const URL_AGENDA_2026 = 'https://www.al.sp.gov.br/repositorioDados/agenda/agenda_eventos_2026.xml';
 
 function carregarEstado() {
   if (fs.existsSync(ARQUIVO_ESTADO)) {
@@ -97,6 +99,76 @@ async function carregarNaturezas() {
   }
 }
 
+function formatarDataIso(dataIso) {
+  if (!dataIso || dataIso.length < 10) return '-';
+  const [ano, mes, dia] = dataIso.substring(0, 10).split('-');
+  return dia + '/' + mes + '/' + ano;
+}
+
+function escaparHtml(valor) {
+  return String(valor || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function parsearAgenda(xmlStr, limite = 12) {
+  const parser = new DOMParser();
+  const doc = parser.parseFromString(xmlStr, 'text/xml');
+  const items = doc.getElementsByTagName('Evento');
+  const hoje = new Date();
+  hoje.setHours(0, 0, 0, 0);
+
+  const termosDeTeste = /audi[eê]ncia|cpi|comiss[aã]o|reuni[aã]o/i;
+  const eventos = [];
+  const idsVistos = new Set();
+
+  for (let i = 0; i < items.length; i++) {
+    const item = items[i];
+    const id = getText(item, 'IdEvento');
+    const dataRaw = getText(item, 'Data');
+    const dataIso = dataRaw.substring(0, 10);
+    const data = new Date(dataIso + 'T00:00:00-03:00');
+    if (!dataIso || Number.isNaN(data.getTime()) || data < hoje) continue;
+
+    const titulo = getText(item, 'Titulo');
+    const descricao = getText(item, 'Descricao');
+    const obs = getText(item, 'Obs');
+    const local = getText(item, 'Local');
+    const chave = [id, dataIso, getText(item, 'HoraIni'), titulo].join('|');
+
+    if (idsVistos.has(chave)) continue;
+    if (!termosDeTeste.test([titulo, descricao, obs, local].join(' '))) continue;
+
+    idsVistos.add(chave);
+    eventos.push({
+      id,
+      data: dataIso,
+      hora: getText(item, 'HoraIni') || '-',
+      titulo,
+      local: local || '-',
+      descricao: (descricao || obs || '-').substring(0, 220),
+    });
+  }
+
+  eventos.sort((a, b) => (a.data + ' ' + a.hora).localeCompare(b.data + ' ' + b.hora));
+  return eventos.slice(0, limite);
+}
+
+async function carregarAgendaAlesp() {
+  try {
+    const buf = await baixarBuffer(URL_AGENDA_2026);
+    const eventos = parsearAgenda(buf.toString('utf8'));
+    console.log('🗓️ Agenda ALESP — teste: ' + eventos.length + ' evento(s) relevante(s) encontrado(s)');
+    return eventos;
+  } catch (err) {
+    console.warn('⚠️ Não foi possível carregar agenda ALESP: ' + err.message);
+    return [];
+  }
+}
+
 function parsearProposicoes(xmlStr, naturezas, anoFiltro) {
   const parser = new DOMParser();
   const doc = parser.parseFromString(xmlStr, 'text/xml');
@@ -165,7 +237,123 @@ function parsearProposicoes(xmlStr, naturezas, anoFiltro) {
   return proposicoes;
 }
 
-async function enviarEmail(novas) {
+function limparHtml(valor) {
+  return String(valor || '')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&ccedil;/g, 'ç')
+    .replace(/&atilde;/g, 'ã')
+    .replace(/&otilde;/g, 'õ')
+    .replace(/&aacute;/g, 'á')
+    .replace(/&eacute;/g, 'é')
+    .replace(/&iacute;/g, 'í')
+    .replace(/&oacute;/g, 'ó')
+    .replace(/&uacute;/g, 'ú')
+    .replace(/&agrave;/g, 'à')
+    .replace(/&ecirc;/g, 'ê')
+    .replace(/&ocirc;/g, 'ô')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&amp;/g, '&')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function dataBrParaIso(dataBr) {
+  const m = String(dataBr || '').match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+  if (!m) return dataBr || '-';
+  return m[3] + '-' + m[2] + '-' + m[1];
+}
+
+function parsearListagemProposicoes(html, tipoFallback, anoFiltro) {
+  const proposicoes = [];
+  const regex = /<a class="tituloItem"[^>]+href="\/propositura\/\?id=(\d+)&tipo=(\d+)&ano=(\d+)"[^>]*>\s*([\s\S]*?)\s*<\/a>\s*<br>\s*<p>([\s\S]*?)<\/p>/g;
+  let match;
+
+  while ((match = regex.exec(html)) !== null) {
+    const id = match[1];
+    const titulo = limparHtml(match[4]);
+    const ementa = limparHtml(match[5]);
+    const dadosTitulo = titulo.match(/^(.+?)\s+(\d+)\/(\d{4}),\s+de\s+(\d{2}\/\d{2}\/\d{4})/i);
+    if (!dadosTitulo || dadosTitulo[3] !== String(anoFiltro)) continue;
+
+    proposicoes.push({
+      id,
+      tipo: dadosTitulo[1] || tipoFallback,
+      numero: dadosTitulo[2] || '-',
+      ano: dadosTitulo[3],
+      data: dataBrParaIso(dadosTitulo[4]),
+      ementa: (ementa || '-').substring(0, 300),
+      link: 'https://www.al.sp.gov.br/propositura/?id=' + id,
+      fonte: 'busca_publica',
+    });
+  }
+
+  return proposicoes;
+}
+
+async function carregarProposicoesListagem(ano) {
+  const tipos = [
+    ['1', 'Projeto de Lei'],
+    ['2', 'Projeto de Lei Complementar'],
+    ['3', 'Projeto de Resolução'],
+    ['4', 'Projeto de Decreto Legislativo'],
+    ['5', 'Proposta de Emenda à Constituição'],
+    ['6', 'Moção'],
+    ['7', 'Requerimento'],
+    ['8', 'Requerimento de Informação'],
+    ['9', 'Indicação'],
+    ['19', 'Ofício'],
+  ];
+
+  const todas = [];
+  for (const [tipoId, tipoNome] of tipos) {
+    const url = 'https://www.al.sp.gov.br/alesp/projetos/?tipo=' + tipoId + '&ano=' + ano;
+    try {
+      const buf = await baixarBuffer(url);
+      const encontradas = parsearListagemProposicoes(iconv.decode(buf, 'latin1'), tipoNome, ano);
+      console.log('🔎 Busca pública ALESP ' + tipoNome + ': ' + encontradas.length + ' item(ns)');
+      todas.push(...encontradas);
+    } catch (err) {
+      console.warn('⚠️ Falha na busca pública ALESP ' + tipoNome + ': ' + err.message);
+    }
+  }
+
+  return todas;
+}
+
+function mesclarProposicoes(fontes) {
+  const porId = new Map();
+  fontes.flat().forEach(p => {
+    if (!p || !p.id) return;
+    const atual = porId.get(p.id);
+    if (!atual || atual.fonte !== 'busca_publica') porId.set(p.id, p);
+  });
+  return Array.from(porId.values());
+}
+
+function montarSecaoAgenda(eventosAgenda) {
+  if (!eventosAgenda || eventosAgenda.length === 0) return '';
+
+  const rows = eventosAgenda.map(e => '<tr>' +
+    '<td style="padding:8px;border-bottom:1px solid #eee;font-size:12px;color:#555;white-space:nowrap">' + formatarDataIso(e.data) + ' ' + escaparHtml(e.hora) + '</td>' +
+    '<td style="padding:8px;border-bottom:1px solid #eee;font-size:13px">' + escaparHtml(e.titulo) + '</td>' +
+    '<td style="padding:8px;border-bottom:1px solid #eee;font-size:12px;color:#555">' + escaparHtml(e.local) + '</td>' +
+  '</tr>').join('');
+
+  return '<h3 style="margin-top:28px;color:#1a3a5c;border-bottom:1px solid #d8e0ea;padding-bottom:6px">Agenda ALESP — teste</h3>' +
+    '<p style="color:#666;font-size:12px;margin-top:0">Fonte em validação: audiências públicas, CPIs/comissões e reuniões futuras da agenda oficial.</p>' +
+    '<table style="width:100%;border-collapse:collapse;font-size:14px">' +
+      '<thead><tr style="background:#eef3f8;color:#1a3a5c">' +
+        '<th style="padding:9px;text-align:left">Data</th>' +
+        '<th style="padding:9px;text-align:left">Evento</th>' +
+        '<th style="padding:9px;text-align:left">Local</th>' +
+      '</tr></thead>' +
+      '<tbody>' + rows + '</tbody>' +
+    '</table>';
+}
+
+async function enviarEmail(novas, eventosAgenda = []) {
   const transporter = nodemailer.createTransport({
     service: 'gmail',
     auth: { user: EMAIL_REMETENTE, pass: EMAIL_SENHA },
@@ -212,6 +400,7 @@ async function enviarEmail(novas) {
         </thead>
         <tbody>${linhas}</tbody>
       </table>
+      ${montarSecaoAgenda(eventosAgenda)}
       <p style="margin-top:20px;font-size:12px;color:#999">
         Fonte: <a href="https://www.al.sp.gov.br/dados-abertos/">Portal Dados Abertos ALESP</a>
       </p>
@@ -248,7 +437,10 @@ async function enviarEmail(novas) {
   }
 
   const xmlStr = extrairXmlDoZip(zipBuffer);
-  const proposicoes = parsearProposicoes(xmlStr, naturezas, ano);
+  const proposicoesZip = parsearProposicoes(xmlStr, naturezas, ano);
+  const proposicoesListagem = await carregarProposicoesListagem(ano);
+  const proposicoes = mesclarProposicoes([proposicoesZip, proposicoesListagem]);
+  console.log('📊 Total consolidado ZIP + busca pública: ' + proposicoes.length);
 
   if (proposicoes.length === 0) {
     console.log('⚠️ Nenhuma proposição encontrada. Verifique o dump 🔬 acima.');
@@ -261,7 +453,8 @@ async function enviarEmail(novas) {
   console.log(`🆕 Proposições novas: ${novas.length}`);
 
   if (novas.length > 0) {
-    await enviarEmail(novas);
+    const eventosAgenda = await carregarAgendaAlesp();
+    await enviarEmail(novas, eventosAgenda);
     novas.forEach(p => idsVistos.add(p.id));
     estado.proposicoes_vistas = Array.from(idsVistos);
   } else {
