@@ -309,7 +309,6 @@ async function carregarProposicoesListagem(ano) {
     ['7', 'Requerimento'],
     ['8', 'Requerimento de Informação'],
     ['9', 'Indicação'],
-    ['19', 'Ofício'],
   ];
 
   const todas = [];
