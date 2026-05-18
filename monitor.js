@@ -315,8 +315,9 @@ async function carregarProposicoesListagem(ano) {
   const todas = [];
   for (const [tipoId, tipoNome] of tipos) {
     const url = 'https://www.al.sp.gov.br/alesp/projetos/?tipo=' + tipoId + '&ano=' + ano;
+    const timeoutMs = tipoId === '9' ? 90000 : 20000;
     try {
-      const buf = await baixarBuffer(url, 20000);
+      const buf = await baixarBuffer(url, timeoutMs);
       const encontradas = parsearListagemProposicoes(iconv.decode(buf, 'latin1'), tipoNome, ano);
       console.log('🔎 Busca pública ALESP ' + tipoNome + ': ' + encontradas.length + ' item(ns)');
       todas.push(...encontradas);
