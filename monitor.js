@@ -120,12 +120,14 @@ function escaparHtml(valor) {
     .replace(/'/g, '&#39;');
 }
 
-function parsearAgenda(xmlStr, limite = 12) {
+function parsearAgenda(xmlStr, limite = 25, diasParaFrente = 60) {
   const parser = new DOMParser();
   const doc = parser.parseFromString(xmlStr, 'text/xml');
   const items = doc.getElementsByTagName('Evento');
   const hoje = new Date();
   hoje.setHours(0, 0, 0, 0);
+  const dataLimite = new Date(hoje);
+  dataLimite.setDate(dataLimite.getDate() + diasParaFrente);
 
   const termosDeTeste = /audi[eê]ncia|cpi|comiss[aã]o|reuni[aã]o/i;
   const eventos = [];
@@ -137,7 +139,7 @@ function parsearAgenda(xmlStr, limite = 12) {
     const dataRaw = getText(item, 'Data');
     const dataIso = dataRaw.substring(0, 10);
     const data = new Date(dataIso + 'T00:00:00-03:00');
-    if (!dataIso || Number.isNaN(data.getTime()) || data < hoje) continue;
+    if (!dataIso || Number.isNaN(data.getTime()) || data < hoje || data > dataLimite) continue;
 
     const titulo = getText(item, 'Titulo');
     const descricao = getText(item, 'Descricao');
