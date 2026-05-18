@@ -316,7 +316,7 @@ async function carregarProposicoesListagem(ano) {
   for (const [tipoId, tipoNome] of tipos) {
     const url = 'https://www.al.sp.gov.br/alesp/projetos/?tipo=' + tipoId + '&ano=' + ano;
     try {
-      const buf = await baixarBuffer(url);
+      const buf = await baixarBuffer(url, 20000);
       const encontradas = parsearListagemProposicoes(iconv.decode(buf, 'latin1'), tipoNome, ano);
       console.log('🔎 Busca pública ALESP ' + tipoNome + ': ' + encontradas.length + ' item(ns)');
       todas.push(...encontradas);
@@ -431,19 +431,16 @@ async function enviarEmail(novas, eventosAgenda = []) {
   const idsVistos = new Set(estado.proposicoes_vistas);
   const ano = new Date().getFullYear();
 
-  let zipBuffer, naturezas;
+  const naturezas = await carregarNaturezas();
+  let proposicoesZip = [];
   try {
-    [zipBuffer, naturezas] = await Promise.all([
-      baixarBuffer(URL_PROPOSITURAS),
-      carregarNaturezas(),
-    ]);
+    const zipBuffer = await baixarBuffer(URL_PROPOSITURAS, 120000);
+    const xmlStr = extrairXmlDoZip(zipBuffer);
+    proposicoesZip = parsearProposicoes(xmlStr, naturezas, ano);
   } catch (err) {
-    console.error(`❌ Falha ao baixar dados: ${err.message}`);
-    process.exit(1);
+    console.warn('⚠️ Falha ao baixar/ler ZIP de proposituras; seguindo com busca pública: ' + err.message);
   }
 
-  const xmlStr = extrairXmlDoZip(zipBuffer);
-  const proposicoesZip = parsearProposicoes(xmlStr, naturezas, ano);
   const proposicoesListagem = await carregarProposicoesListagem(ano);
   const proposicoes = mesclarProposicoes([proposicoesZip, proposicoesListagem]);
   console.log('📊 Total consolidado ZIP + busca pública: ' + proposicoes.length);
