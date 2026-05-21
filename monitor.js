@@ -169,7 +169,7 @@ async function carregarAgendaAlesp() {
   try {
     const buf = await baixarBuffer(URL_AGENDA_2026);
     const eventos = parsearAgenda(buf.toString('utf8'));
-    console.log('🗓️ Agenda ALESP — teste: ' + eventos.length + ' evento(s) relevante(s) encontrado(s)');
+    console.log('🗓️ Agenda da Assembleia Legislativa de São Paulo — teste: ' + eventos.length + ' evento(s) relevante(s) encontrado(s)');
     return eventos;
   } catch (err) {
     console.warn('⚠️ Não foi possível carregar agenda ALESP: ' + err.message);
@@ -357,7 +357,7 @@ function montarSecaoAgenda(eventosAgenda) {
     '<td style="padding:8px;border-bottom:1px solid #eee;font-size:12px;color:#555">' + escaparHtml(e.local) + '</td>' +
   '</tr>').join('');
 
-  return '<h3 style="margin-top:28px;color:#1a3a5c;border-bottom:1px solid #d8e0ea;padding-bottom:6px">Agenda ALESP — teste</h3>' +
+  return '<h3 style="margin-top:28px;color:#1a3a5c;border-bottom:1px solid #d8e0ea;padding-bottom:6px">Agenda da Assembleia Legislativa de São Paulo — teste</h3>' +
     '<p style="color:#666;font-size:12px;margin-top:0">Fonte em validação: audiências públicas, CPIs/comissões e reuniões futuras da agenda oficial.</p>' +
     '<table style="width:100%;border-collapse:collapse;font-size:14px">' +
       '<thead><tr style="background:#eef3f8;color:#1a3a5c">' +
@@ -402,7 +402,7 @@ async function enviarEmail(novas, eventosAgenda = []) {
   const html = `
     <div style="font-family:Arial,sans-serif;max-width:900px;margin:0 auto">
       <h2 style="color:#1a3a5c;border-bottom:2px solid #1a3a5c;padding-bottom:8px">
-        🏛️ ALESP — ${novas.length} nova(s) proposição(ões)
+        🏛️ Assembleia Legislativa de São Paulo — ${novas.length} nova(s) proposição(ões)
       </h2>
       <p style="color:#666;font-size:13px">Monitoramento automático — ${new Date().toLocaleString('pt-BR', {timeZone:'America/Sao_Paulo'})}</p>
       <table style="width:100%;border-collapse:collapse;font-size:14px">
@@ -418,15 +418,15 @@ async function enviarEmail(novas, eventosAgenda = []) {
       </table>
       ${montarSecaoAgenda(eventosAgenda)}
       <p style="margin-top:20px;font-size:12px;color:#999">
-        Fonte: <a href="https://www.al.sp.gov.br/dados-abertos/">Portal Dados Abertos ALESP</a>
+        Fonte: <a href="https://www.al.sp.gov.br/dados-abertos/">Portal de Dados Abertos da Assembleia Legislativa de São Paulo</a>
       </p>
     </div>
   `;
 
   await transporter.sendMail({
-    from: `"Monitor ALESP" <${EMAIL_REMETENTE}>`,
+    from: `"Monitor São Paulo" <${EMAIL_REMETENTE}>`,
     to: EMAIL_DESTINO,
-    subject: `🏛️ ALESP: ${novas.length} nova(s) proposição(ões) — ${new Date().toLocaleDateString('pt-BR')}`,
+    subject: `🏛️ São Paulo: ${novas.length} nova(s) proposição(ões) — ${new Date().toLocaleDateString('pt-BR')}`,
     html,
   });
 
