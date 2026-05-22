@@ -120,14 +120,23 @@ function escaparHtml(valor) {
     .replace(/'/g, '&#39;');
 }
 
-function parsearAgenda(xmlStr, limite = 25, diasParaFrente = 60) {
+function adicionarMeses(data, meses) {
+  const result = new Date(data);
+  const diaOriginal = result.getDate();
+  result.setMonth(result.getMonth() + meses);
+  if (result.getDate() < diaOriginal) {
+    result.setDate(0);
+  }
+  return result;
+}
+
+function parsearAgenda(xmlStr, limite = 200, mesesParaFrente = 2) {
   const parser = new DOMParser();
   const doc = parser.parseFromString(xmlStr, 'text/xml');
   const items = doc.getElementsByTagName('Evento');
   const hoje = new Date();
   hoje.setHours(0, 0, 0, 0);
-  const dataLimite = new Date(hoje);
-  dataLimite.setDate(dataLimite.getDate() + diasParaFrente);
+  const dataLimite = adicionarMeses(hoje, mesesParaFrente);
 
   const termosDeTeste = /audi[eê]ncia|cpi|comiss[aã]o|reuni[aã]o/i;
   const eventos = [];
