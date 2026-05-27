@@ -12,6 +12,7 @@ const ARQUIVO_ESTADO = 'estado.json';
 const URL_PROPOSITURAS = 'https://www.al.sp.gov.br/repositorioDados/processo_legislativo/proposituras.zip';
 const URL_NATUREZAS   = 'https://www.al.sp.gov.br/repositorioDados/processo_legislativo/naturezasSpl.xml';
 const URL_AGENDA_2026 = 'https://www.al.sp.gov.br/repositorioDados/agenda/agenda_eventos_2026.xml';
+const DIAS_AGENDA_FRENTE = 60;
 
 function carregarEstado() {
   if (fs.existsSync(ARQUIVO_ESTADO)) {
@@ -120,23 +121,27 @@ function escaparHtml(valor) {
     .replace(/'/g, '&#39;');
 }
 
-function adicionarMeses(data, meses) {
+function adicionarDias(data, dias) {
   const result = new Date(data);
-  const diaOriginal = result.getDate();
-  result.setMonth(result.getMonth() + meses);
-  if (result.getDate() < diaOriginal) {
-    result.setDate(0);
-  }
+  result.setDate(result.getDate() + dias);
   return result;
 }
 
-function parsearAgenda(xmlStr, limite = 200, mesesParaFrente = 2) {
+function isoLocal(data) {
+  return [
+    data.getFullYear(),
+    String(data.getMonth() + 1).padStart(2, '0'),
+    String(data.getDate()).padStart(2, '0'),
+  ].join('-');
+}
+
+function parsearAgenda(xmlStr, limite = 200, diasParaFrente = DIAS_AGENDA_FRENTE) {
   const parser = new DOMParser();
   const doc = parser.parseFromString(xmlStr, 'text/xml');
   const items = doc.getElementsByTagName('Evento');
   const hoje = new Date();
   hoje.setHours(0, 0, 0, 0);
-  const dataLimite = adicionarMeses(hoje, mesesParaFrente);
+  const dataLimite = adicionarDias(hoje, diasParaFrente);
 
   const termosDeTeste = /audi[eê]ncia|cpi|comiss[aã]o|reuni[aã]o/i;
   const eventos = [];
@@ -171,18 +176,29 @@ function parsearAgenda(xmlStr, limite = 200, mesesParaFrente = 2) {
   }
 
   eventos.sort((a, b) => (a.data + ' ' + a.hora).localeCompare(b.data + ' ' + b.hora));
-  return eventos.slice(0, limite);
+  const eventosLimitados = eventos.slice(0, limite);
+  return {
+    eventos: eventosLimitados,
+    dataInicio: isoLocal(hoje),
+    dataLimite: isoLocal(dataLimite),
+    diasParaFrente,
+    totalEncontrados: eventos.length,
+    totalExibidos: eventosLimitados.length,
+    ultimaData: eventos.length ? eventos[eventos.length - 1].data : null,
+  };
 }
 
 async function carregarAgendaAlesp() {
   try {
     const buf = await baixarBuffer(URL_AGENDA_2026);
-    const eventos = parsearAgenda(buf.toString('utf8'));
-    console.log('🗓️ Agenda da Assembleia Legislativa de São Paulo — teste: ' + eventos.length + ' evento(s) relevante(s) encontrado(s)');
-    return eventos;
+    const agenda = parsearAgenda(buf.toString('utf8'));
+    console.log('🗓️ Agenda da Assembleia Legislativa de São Paulo — janela ' +
+      formatarDataIso(agenda.dataInicio) + ' a ' + formatarDataIso(agenda.dataLimite) +
+      ': ' + agenda.totalEncontrados + ' evento(s) relevante(s) encontrado(s)');
+    return agenda;
   } catch (err) {
     console.warn('⚠️ Não foi possível carregar agenda ALESP: ' + err.message);
-    return [];
+    return { eventos: [], dataInicio: null, dataLimite: null, diasParaFrente: DIAS_AGENDA_FRENTE, totalEncontrados: 0, totalExibidos: 0, ultimaData: null };
   }
 }
 
@@ -357,8 +373,20 @@ function mesclarProposicoes(fontes) {
   return Array.from(porId.values());
 }
 
-function montarSecaoAgenda(eventosAgenda) {
-  if (!eventosAgenda || eventosAgenda.length === 0) return '';
+function montarSecaoAgenda(agendaAlesp) {
+  const eventosAgenda = Array.isArray(agendaAlesp) ? agendaAlesp : (agendaAlesp && agendaAlesp.eventos) || [];
+  const meta = Array.isArray(agendaAlesp) ? {} : (agendaAlesp || {});
+  const janela = meta.dataInicio && meta.dataLimite
+    ? 'Janela consultada: ' + formatarDataIso(meta.dataInicio) + ' a ' + formatarDataIso(meta.dataLimite) + ' (' + (meta.diasParaFrente || DIAS_AGENDA_FRENTE) + ' dias). '
+    : '';
+  const notaSemEventosAteLimite = meta.ultimaData && meta.dataLimite && meta.ultimaData < meta.dataLimite
+    ? '<p style="color:#666;font-size:12px;margin-top:4px">Último evento relevante encontrado nesse recorte: ' + formatarDataIso(meta.ultimaData) + '. Não há audiência/CPI/comissão/reunião publicada entre essa data e ' + formatarDataIso(meta.dataLimite) + '.</p>'
+    : '';
+
+  if (!eventosAgenda || eventosAgenda.length === 0) {
+    return '<h3 style="margin-top:28px;color:#1a3a5c;border-bottom:1px solid #d8e0ea;padding-bottom:6px">Agenda da Assembleia Legislativa de São Paulo</h3>' +
+      '<p style="color:#666;font-size:12px;margin-top:0">' + janela + 'Nenhum evento relevante encontrado no recorte de audiências públicas, CPIs/comissões e reuniões futuras da agenda oficial.</p>';
+  }
 
   const rows = eventosAgenda.map(e => '<tr>' +
     '<td style="padding:8px;border-bottom:1px solid #eee;font-size:12px;color:#555;white-space:nowrap">' + formatarDataIso(e.data) + ' ' + escaparHtml(e.hora) + '</td>' +
@@ -366,8 +394,9 @@ function montarSecaoAgenda(eventosAgenda) {
     '<td style="padding:8px;border-bottom:1px solid #eee;font-size:12px;color:#555">' + escaparHtml(e.local) + '</td>' +
   '</tr>').join('');
 
-  return '<h3 style="margin-top:28px;color:#1a3a5c;border-bottom:1px solid #d8e0ea;padding-bottom:6px">Agenda da Assembleia Legislativa de São Paulo — teste</h3>' +
-    '<p style="color:#666;font-size:12px;margin-top:0">Fonte em validação: audiências públicas, CPIs/comissões e reuniões futuras da agenda oficial.</p>' +
+  return '<h3 style="margin-top:28px;color:#1a3a5c;border-bottom:1px solid #d8e0ea;padding-bottom:6px">Agenda da Assembleia Legislativa de São Paulo</h3>' +
+    '<p style="color:#666;font-size:12px;margin-top:0">' + janela + 'Recorte exibido: audiências públicas, CPIs/comissões e reuniões futuras da agenda oficial.</p>' +
+    notaSemEventosAteLimite +
     '<table style="width:100%;border-collapse:collapse;font-size:14px">' +
       '<thead><tr style="background:#eef3f8;color:#1a3a5c">' +
         '<th style="padding:9px;text-align:left">Data</th>' +
@@ -475,8 +504,8 @@ async function enviarEmail(novas, eventosAgenda = []) {
   console.log(`🆕 Proposições novas: ${novas.length}`);
 
   if (novas.length > 0) {
-    const eventosAgenda = await carregarAgendaAlesp();
-    await enviarEmail(novas, eventosAgenda);
+    const agendaAlesp = await carregarAgendaAlesp();
+    await enviarEmail(novas, agendaAlesp);
     novas.forEach(p => idsVistos.add(p.id));
     estado.proposicoes_vistas = Array.from(idsVistos);
   } else {
