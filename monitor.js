@@ -12,6 +12,8 @@ const ARQUIVO_ESTADO = 'estado.json';
 const URL_PROPOSITURAS = 'https://www.al.sp.gov.br/repositorioDados/processo_legislativo/proposituras.zip';
 const URL_NATUREZAS   = 'https://www.al.sp.gov.br/repositorioDados/processo_legislativo/naturezasSpl.xml';
 const URL_AGENDA_2026 = 'https://www.al.sp.gov.br/repositorioDados/agenda/agenda_eventos_2026.xml';
+// Regra operacional: listar todos os eventos oficiais publicados na agenda ALESP
+// pelos próximos 60 dias, sem filtro por tipo de evento.
 const DIAS_AGENDA_FRENTE = 60;
 
 function carregarEstado() {
@@ -135,7 +137,7 @@ function isoLocal(data) {
   ].join('-');
 }
 
-function parsearAgenda(xmlStr, limite = 200, diasParaFrente = DIAS_AGENDA_FRENTE) {
+function parsearAgenda(xmlStr, limite = Number.POSITIVE_INFINITY, diasParaFrente = DIAS_AGENDA_FRENTE) {
   const parser = new DOMParser();
   const doc = parser.parseFromString(xmlStr, 'text/xml');
   const items = doc.getElementsByTagName('Evento');
@@ -143,7 +145,6 @@ function parsearAgenda(xmlStr, limite = 200, diasParaFrente = DIAS_AGENDA_FRENTE
   hoje.setHours(0, 0, 0, 0);
   const dataLimite = adicionarDias(hoje, diasParaFrente);
 
-  const termosDeTeste = /audi[eê]ncia|cpi|comiss[aã]o|reuni[aã]o/i;
   const eventos = [];
   const idsVistos = new Set();
 
@@ -162,7 +163,6 @@ function parsearAgenda(xmlStr, limite = 200, diasParaFrente = DIAS_AGENDA_FRENTE
     const chave = [id, dataIso, getText(item, 'HoraIni'), titulo].join('|');
 
     if (idsVistos.has(chave)) continue;
-    if (!termosDeTeste.test([titulo, descricao, obs, local].join(' '))) continue;
 
     idsVistos.add(chave);
     eventos.push({
@@ -194,7 +194,7 @@ async function carregarAgendaAlesp() {
     const agenda = parsearAgenda(buf.toString('utf8'));
     console.log('🗓️ Agenda da Assembleia Legislativa de São Paulo — janela ' +
       formatarDataIso(agenda.dataInicio) + ' a ' + formatarDataIso(agenda.dataLimite) +
-      ': ' + agenda.totalEncontrados + ' evento(s) relevante(s) encontrado(s)');
+      ': ' + agenda.totalEncontrados + ' evento(s) oficial(is) encontrado(s)');
     return agenda;
   } catch (err) {
     console.warn('⚠️ Não foi possível carregar agenda ALESP: ' + err.message);
@@ -379,13 +379,9 @@ function montarSecaoAgenda(agendaAlesp) {
   const janela = meta.dataInicio && meta.dataLimite
     ? 'Janela consultada: ' + formatarDataIso(meta.dataInicio) + ' a ' + formatarDataIso(meta.dataLimite) + ' (' + (meta.diasParaFrente || DIAS_AGENDA_FRENTE) + ' dias). '
     : '';
-  const notaSemEventosAteLimite = meta.ultimaData && meta.dataLimite && meta.ultimaData < meta.dataLimite
-    ? '<p style="color:#666;font-size:12px;margin-top:4px">Último evento relevante encontrado nesse recorte: ' + formatarDataIso(meta.ultimaData) + '. Não há audiência/CPI/comissão/reunião publicada entre essa data e ' + formatarDataIso(meta.dataLimite) + '.</p>'
-    : '';
-
   if (!eventosAgenda || eventosAgenda.length === 0) {
     return '<h3 style="margin-top:28px;color:#1a3a5c;border-bottom:1px solid #d8e0ea;padding-bottom:6px">Agenda da Assembleia Legislativa de São Paulo</h3>' +
-      '<p style="color:#666;font-size:12px;margin-top:0">' + janela + 'Nenhum evento relevante encontrado no recorte de audiências públicas, CPIs/comissões e reuniões futuras da agenda oficial.</p>';
+      '<p style="color:#666;font-size:12px;margin-top:0">' + janela + 'Nenhum evento oficial encontrado na agenda da ALESP para os próximos 60 dias.</p>';
   }
 
   const rows = eventosAgenda.map(e => '<tr>' +
@@ -395,8 +391,7 @@ function montarSecaoAgenda(agendaAlesp) {
   '</tr>').join('');
 
   return '<h3 style="margin-top:28px;color:#1a3a5c;border-bottom:1px solid #d8e0ea;padding-bottom:6px">Agenda da Assembleia Legislativa de São Paulo</h3>' +
-    '<p style="color:#666;font-size:12px;margin-top:0">' + janela + 'Recorte exibido: audiências públicas, CPIs/comissões e reuniões futuras da agenda oficial.</p>' +
-    notaSemEventosAteLimite +
+    '<p style="color:#666;font-size:12px;margin-top:0">' + janela + 'Eventos oficiais publicados na agenda da ALESP dentro dos próximos 60 dias.</p>' +
     '<table style="width:100%;border-collapse:collapse;font-size:14px">' +
       '<thead><tr style="background:#eef3f8;color:#1a3a5c">' +
         '<th style="padding:9px;text-align:left">Data</th>' +

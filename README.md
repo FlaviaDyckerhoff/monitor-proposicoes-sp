@@ -12,7 +12,8 @@ Monitora automaticamente as proposições da Assembleia Legislativa do Estado de
 4. Filtra apenas proposições do ano atual
 5. Compara com os IDs já registrados no `estado.json`
 6. Se há proposições novas → envia email organizado por tipo
-7. Salva o estado atualizado no repositório
+7. Inclui no final do email a agenda oficial da ALESP com todos os eventos publicados para os próximos 60 dias
+8. Salva o estado atualizado no repositório
 
 > **Diferença em relação ao monitor do PR:** a ALESP não tem API REST — disponibiliza um ZIP com XML atualizado diariamente. O script baixa e processa esse arquivo a cada execução.
 
@@ -25,6 +26,13 @@ URL: https://www.al.sp.gov.br/repositorioDados/processo_legislativo/proposituras
 Formato: ZIP contendo XML
 Atualização: Diária (~03h30)
 Documentação: https://www.al.sp.gov.br/dados-abertos/
+```
+
+Agenda ALESP no email:
+
+```
+URL: https://www.al.sp.gov.br/repositorioDados/agenda/agenda_eventos_2026.xml
+Regra: listar todos os eventos oficiais publicados nos próximos 60 dias, sem filtro por tipo de evento
 ```
 
 ---
