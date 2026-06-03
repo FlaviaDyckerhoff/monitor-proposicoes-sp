@@ -13,7 +13,7 @@ const URL_PROPOSITURAS = 'https://www.al.sp.gov.br/repositorioDados/processo_leg
 const URL_NATUREZAS   = 'https://www.al.sp.gov.br/repositorioDados/processo_legislativo/naturezasSpl.xml';
 const URL_AGENDA_2026 = 'https://www.al.sp.gov.br/repositorioDados/agenda/agenda_eventos_2026.xml';
 // Regra operacional: listar todos os eventos oficiais publicados na agenda ALESP
-// pelos próximos 60 dias, sem filtro por tipo de evento.
+// pelos próximos 60 dias, excluindo reservas/bloqueios internos de sala.
 const DIAS_AGENDA_FRENTE = 60;
 
 function carregarEstado() {
@@ -137,6 +137,27 @@ function isoLocal(data) {
   ].join('-');
 }
 
+function normalizarTextoBusca(valor) {
+  return String(valor || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toUpperCase()
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function eventoAgendaBloqueado(evento) {
+  const texto = normalizarTextoBusca([
+    evento.titulo,
+    evento.local,
+    evento.descricao,
+  ].join(' '));
+
+  return /\bBLOQUEAD[OA]S?\b/.test(texto)
+    || /\bMANUTENCAO\b/.test(texto)
+    || /\bRESERVAD[OA]S?\b/.test(texto);
+}
+
 function parsearAgenda(xmlStr, limite = Number.POSITIVE_INFINITY, diasParaFrente = DIAS_AGENDA_FRENTE) {
   const parser = new DOMParser();
   const doc = parser.parseFromString(xmlStr, 'text/xml');
@@ -147,6 +168,7 @@ function parsearAgenda(xmlStr, limite = Number.POSITIVE_INFINITY, diasParaFrente
 
   const eventos = [];
   const idsVistos = new Set();
+  let bloqueadosIgnorados = 0;
 
   for (let i = 0; i < items.length; i++) {
     const item = items[i];
@@ -160,19 +182,26 @@ function parsearAgenda(xmlStr, limite = Number.POSITIVE_INFINITY, diasParaFrente
     const descricao = getText(item, 'Descricao');
     const obs = getText(item, 'Obs');
     const local = getText(item, 'Local');
-    const chave = [id, dataIso, getText(item, 'HoraIni'), titulo].join('|');
-
-    if (idsVistos.has(chave)) continue;
-
-    idsVistos.add(chave);
-    eventos.push({
+    const evento = {
       id,
       data: dataIso,
       hora: getText(item, 'HoraIni') || '-',
       titulo,
       local: local || '-',
       descricao: (descricao || obs || '-').substring(0, 220),
-    });
+    };
+
+    if (eventoAgendaBloqueado(evento)) {
+      bloqueadosIgnorados++;
+      continue;
+    }
+
+    const chave = [id, dataIso, getText(item, 'HoraIni'), titulo].join('|');
+
+    if (idsVistos.has(chave)) continue;
+
+    idsVistos.add(chave);
+    eventos.push(evento);
   }
 
   eventos.sort((a, b) => (a.data + ' ' + a.hora).localeCompare(b.data + ' ' + b.hora));
@@ -184,6 +213,7 @@ function parsearAgenda(xmlStr, limite = Number.POSITIVE_INFINITY, diasParaFrente
     diasParaFrente,
     totalEncontrados: eventos.length,
     totalExibidos: eventosLimitados.length,
+    bloqueadosIgnorados,
     ultimaData: eventos.length ? eventos[eventos.length - 1].data : null,
   };
 }
@@ -194,7 +224,8 @@ async function carregarAgendaAlesp() {
     const agenda = parsearAgenda(buf.toString('utf8'));
     console.log('🗓️ Agenda da Assembleia Legislativa de São Paulo — janela ' +
       formatarDataIso(agenda.dataInicio) + ' a ' + formatarDataIso(agenda.dataLimite) +
-      ': ' + agenda.totalEncontrados + ' evento(s) oficial(is) encontrado(s)');
+      ': ' + agenda.totalEncontrados + ' evento(s) oficial(is) encontrado(s), ' +
+      (agenda.bloqueadosIgnorados || 0) + ' bloqueio(s)/reserva(s) ignorado(s)');
     return agenda;
   } catch (err) {
     console.warn('⚠️ Não foi possível carregar agenda ALESP: ' + err.message);
@@ -403,11 +434,7 @@ function montarSecaoAgenda(agendaAlesp) {
 }
 
 function prioridadeTipoEmail(tipo) {
-  const t = String(tipo || '')
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .toUpperCase()
-    .trim();
+  const t = normalizarTextoBusca(tipo);
 
   if (/^(PL|PLO)(\b|$)/.test(t) || /^PROJETO DE LEI( ORDINARIA)?$/.test(t)) return 0;
   if (/^PLC(\b|$)/.test(t) || /^PROJETO DE LEI COMPLEMENTAR/.test(t)) return 1;
