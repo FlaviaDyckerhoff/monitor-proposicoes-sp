@@ -480,6 +480,48 @@ function anotarClientesCitados(proposicoes) {
   }
 }
 
+function mlEscapeHtmlClienteDestaque(valor) {
+  return String(valor ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/\"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function mlEscapeRegExpClienteDestaque(valor) {
+  return String(valor).replace(/[.*+?^\${}()|[\]\\]/g, '\\$&');
+}
+
+function mlDestacarTermosClienteEmail(texto, clientes) {
+  const nomes = Array.from(new Set([...(clientes || []), ...CLIENTES_NOMES_PROPRIOS]))
+    .filter(Boolean)
+    .sort((a, b) => b.length - a.length);
+  if (!nomes.length) return mlEscapeHtmlClienteDestaque(texto);
+
+  const regex = new RegExp('(^|[^A-Za-zÀ-ÿ0-9])(' + nomes.map(mlEscapeRegExpClienteDestaque).join('|') + ')(?=[^A-Za-zÀ-ÿ0-9]|$)', 'gi');
+  return mlEscapeHtmlClienteDestaque(texto).replace(regex, (match, prefixo, termo) => {
+    return prefixo + '<span style="background:#dbeafe;color:#1e3a8a;font-weight:700;border-radius:3px;padding:1px 3px">' + termo + '</span>';
+  });
+}
+
+function renderizarEmentaCliente(p, renderBase) {
+  const texto = String((p && p.ementa) || '-');
+  const partes = texto.split(/\s+\|\s+Cliente citado:\s+/i);
+  const ementa = renderBase
+    ? renderBase(partes[0])
+    : mlDestacarTermosClienteEmail(partes[0], p && p.clientesCitados);
+  const clientes = partes.length > 1
+    ? partes.slice(1).join(' | Cliente citado: ')
+    : ((p && p.clientesCitados) || []).join(', ');
+
+  if (!clientes) return ementa;
+  return ementa + '<div style="margin-top:6px">' +
+    '<span style="display:inline-block;background:#eef6ff;border:1px solid #bfdbfe;color:#1e3a8a;border-radius:999px;padding:3px 8px;font-size:11px;font-weight:700">' +
+    'Cliente citado: ' + mlDestacarTermosClienteEmail(clientes, p && p.clientesCitados) +
+    '</span></div>';
+}
+
 async function enviarEmail(novas, eventosAgenda = []) {
   anotarClientesCitados(novas);
   const transporter = nodemailer.createTransport({
@@ -503,7 +545,7 @@ async function enviarEmail(novas, eventosAgenda = []) {
           <a href="${p.link}" style="color:#1a3a5c;font-weight:bold;text-decoration:none">${p.numero}/${p.ano}</a>
         </td>
         <td style="padding:8px;border-bottom:1px solid #eee;font-size:12px;color:#555;white-space:nowrap">${p.data}</td>
-        <td style="padding:8px;border-bottom:1px solid #eee;font-size:13px">${p.ementa}</td>
+        <td style="padding:8px;border-bottom:1px solid #eee;font-size:13px">${renderizarEmentaCliente(p)}</td>
         <td style="padding:8px;border-bottom:1px solid #eee;white-space:nowrap">
           <a href="${p.link}" style="font-size:11px;color:#1a7bc4;text-decoration:none">🔗 ver</a>
         </td>
