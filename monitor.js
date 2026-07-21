@@ -8,6 +8,9 @@ const EMAIL_DESTINO = process.env.EMAIL_DESTINO;
 const EMAIL_REMETENTE = process.env.EMAIL_REMETENTE;
 const EMAIL_SENHA = process.env.EMAIL_SENHA;
 const ARQUIVO_ESTADO = 'estado.json';
+const RADAR03_URL = process.env.RADAR03_URL || 'https://doe.monitorlegislativo.com.br/controle03/';
+const CASA_RADAR03 = process.env.CASA_RADAR03 || 'ALESP';
+
 
 const URL_PROPOSITURAS = 'https://www.al.sp.gov.br/repositorioDados/processo_legislativo/proposituras.zip';
 const URL_NATUREZAS   = 'https://www.al.sp.gov.br/repositorioDados/processo_legislativo/naturezasSpl.xml';
@@ -553,6 +556,66 @@ function renderizarEmentaCliente(p, renderBase) {
     '</span></div>';
 }
 
+
+function radar03Numero(p) {
+  const numero = String(p?.numero ?? p?.numero_proposicao ?? p?.num ?? '').trim();
+  const ano = String(p?.ano ?? p?.ano_proposicao ?? '').trim();
+  if (!numero) return '';
+  if (numero.includes('/') || !ano) return numero;
+  return numero + '/' + ano;
+}
+
+function radar03BlocoEmail(novas) {
+  const seen = new Set();
+  return (novas || []).map(p => {
+    const tipo = String(p?.tipo ?? p?.sigla ?? p?.rotulo ?? '').trim();
+    const numero = radar03Numero(p);
+    if (!tipo || !numero) return '';
+    const row = `${tipo} ${numero}`;
+    const key = row.toUpperCase();
+    if (seen.has(key)) return '';
+    seen.add(key);
+    return row;
+  }).filter(Boolean).join(' | ');
+}
+
+function radar03PrimeiraFonte(novas) {
+  const item = (novas || []).find(p => p?.link || p?.url || p?.fonte || p?.projeto_url);
+  return item ? String(item.link || item.url || item.fonte || item.projeto_url || '') : '';
+}
+
+function radar03ReviewUrl(novas) {
+  const params = new URLSearchParams({
+    casa: CASA_RADAR03,
+    bloco: radar03BlocoEmail(novas),
+    fonte: radar03PrimeiraFonte(novas),
+  });
+  return `${RADAR03_URL}?${params.toString()}`;
+}
+
+function radar03Escape(valor) {
+  return String(valor ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function renderRadar03EmailButton(novas) {
+  const bloco = radar03BlocoEmail(novas);
+  if (!bloco) return '';
+  return `
+    <div style="background:#dcfce7;border:2px solid #15803d;border-radius:8px;padding:14px 16px;margin:0 0 16px;color:#14532d;font-size:13px">
+      <div style="font-weight:bold;margin-bottom:6px;font-size:15px">Atualizar/Revisar no Radar 03</div>
+      <div style="margin-bottom:10px;color:#14532d;font-weight:bold">${radar03Escape(CASA_RADAR03)} · ${radar03Escape(bloco)}</div>
+      <a href="${radar03Escape(radar03ReviewUrl(novas))}" style="display:inline-block;background:#15803d;color:white;text-decoration:none;border-radius:6px;padding:10px 14px;font-size:13px;font-weight:bold">Abrir 03 preenchida</a>
+      <span style="display:inline-block;font-size:12px;color:#334155;margin-left:8px">confirmação humana antes de salvar</span>
+    </div>
+  `;
+}
+
+
 async function enviarEmail(novas, eventosAgenda = []) {
   anotarClientesCitados(novas);
   const transporter = nodemailer.createTransport({
@@ -585,6 +648,7 @@ async function enviarEmail(novas, eventosAgenda = []) {
   }).join('');
 
   const html = `
+      ${renderRadar03EmailButton(novas)}
     <div style="font-family:Arial,sans-serif;max-width:900px;margin:0 auto">
       <h2 style="color:#1a3a5c;border-bottom:2px solid #1a3a5c;padding-bottom:8px">
         🏛️ Assembleia Legislativa de São Paulo — ${novas.length} nova(s) proposição(ões)
