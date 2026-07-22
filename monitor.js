@@ -565,18 +565,43 @@ function radar03Numero(p) {
   return numero + '/' + ano;
 }
 
+function radar03NumeroPartes(p) {
+  const numeroRaw = String(p?.numero ?? p?.numero_proposicao ?? p?.num ?? '').trim();
+  const anoRaw = String(p?.ano ?? p?.ano_proposicao ?? '').trim();
+  if (!numeroRaw) return null;
+
+  const match = numeroRaw.match(/^(\d+)\s*\/\s*(\d{2,4})$/);
+  const numero = match ? match[1] : numeroRaw;
+  const ano = match ? match[2] : anoRaw;
+  const numeroInt = parseInt(numero, 10);
+  if (!Number.isFinite(numeroInt)) return null;
+
+  return {
+    numero,
+    numeroInt,
+    ano: ano && ano.length === 2 ? '20' + ano : ano,
+  };
+}
+
 function radar03BlocoEmail(novas) {
-  const seen = new Set();
-  return (novas || []).map(p => {
+  const maioresPorTipoAno = new Map();
+
+  (novas || []).forEach(p => {
     const tipo = String(p?.tipo ?? p?.sigla ?? p?.rotulo ?? '').trim();
-    const numero = radar03Numero(p);
-    if (!tipo || !numero) return '';
-    const row = `${tipo} ${numero}`;
-    const key = row.toUpperCase();
-    if (seen.has(key)) return '';
-    seen.add(key);
-    return row;
-  }).filter(Boolean).join(' | ');
+    const partes = radar03NumeroPartes(p);
+    if (!tipo || !partes) return;
+
+    const key = [tipo.toUpperCase(), partes.ano || ''].join('|');
+    const atual = maioresPorTipoAno.get(key);
+    if (!atual || partes.numeroInt > atual.numeroInt) {
+      maioresPorTipoAno.set(key, { tipo, ...partes });
+    }
+  });
+
+  return Array.from(maioresPorTipoAno.values())
+    .sort((a, b) => a.tipo.localeCompare(b.tipo, 'pt-BR') || String(a.ano).localeCompare(String(b.ano)))
+    .map(item => `${item.tipo} ${item.numero}${item.ano ? '/' + item.ano : ''}`)
+    .join(' | ');
 }
 
 function radar03PrimeiraFonte(novas) {
