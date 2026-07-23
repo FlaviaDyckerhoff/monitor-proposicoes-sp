@@ -10,6 +10,10 @@ const EMAIL_SENHA = process.env.EMAIL_SENHA;
 const ARQUIVO_ESTADO = 'estado.json';
 const RADAR03_URL = process.env.RADAR03_URL || 'https://doe.monitorlegislativo.com.br/controle03/';
 const CASA_RADAR03 = process.env.CASA_RADAR03 || 'ALESP';
+const CONTROLE03_STATE_URL = process.env.CONTROLE03_STATE_URL || new URL('api/state', RADAR03_URL).toString();
+const CONTROLE03_API_USER = process.env.CONTROLE03_API_USER || '';
+const CONTROLE03_API_PASS = process.env.CONTROLE03_API_PASS || '';
+const CONTROLE03_BASIC_AUTH = process.env.CONTROLE03_BASIC_AUTH || '';
 
 
 const URL_PROPOSITURAS = 'https://www.al.sp.gov.br/repositorioDados/processo_legislativo/proposituras.zip';
@@ -609,6 +613,135 @@ function radar03PrimeiraFonte(novas) {
   return item ? String(item.link || item.url || item.fonte || item.projeto_url || '') : '';
 }
 
+function radar03TipoControle(tipo) {
+  const normal = String(tipo || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toUpperCase()
+    .replace(/\s+/g, ' ')
+    .trim();
+  const mapa = {
+    'PROJETO DE LEI': 'PL',
+    'PL': 'PL',
+    'PROJETO DE LEI COMPLEMENTAR': 'PLC',
+    'PLC': 'PLC',
+    'PROPOSTA DE EMENDA A CONSTITUICAO': 'PEC',
+    'PEC': 'PEC',
+    'PROJETO DE DECRETO LEGISLATIVO': 'PDL',
+    'PDL': 'PDL',
+    'PROJETO DE RESOLUCAO': 'PR',
+    'PR': 'PR',
+    'INDICACAO': 'IND',
+    'MOCAO': 'MOC',
+    'REQUERIMENTO': 'REQ',
+    'REQ.': 'REQ',
+    'REQUERIMENTO DE INFORMACAO': 'REQINF',
+    'RI': 'REQINF',
+    'VETO': 'VETO',
+  };
+  return mapa[normal] || String(tipo || '').trim().toUpperCase();
+}
+
+function radar03DiaUtilAtual() {
+  const w = new Intl.DateTimeFormat('en-US', { timeZone: 'America/Sao_Paulo', weekday: 'short' }).format(new Date());
+  const d = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 }[w] || 0;
+  if (d === 0 || d === 6) return 4;
+  return Math.max(0, Math.min(4, d - 1));
+}
+
+function radar03AuthHeaders() {
+  const headers = { 'Content-Type': 'application/json' };
+  const token = CONTROLE03_BASIC_AUTH || (
+    CONTROLE03_API_USER && CONTROLE03_API_PASS
+      ? Buffer.from(CONTROLE03_API_USER + ':' + CONTROLE03_API_PASS).toString('base64')
+      : ''
+  );
+  if (token) headers.Authorization = token.startsWith('Basic ') ? token : 'Basic ' + token;
+  return headers;
+}
+
+function radar03AgruparNovidades(novas) {
+  const porTipo = new Map();
+  (novas || []).forEach(p => {
+    const tipo = radar03TipoControle(p?.tipo || p?.sigla || p?.rotulo || '');
+    const partes = radar03NumeroPartes(p);
+    if (!tipo || !partes) return;
+    const atual = porTipo.get(tipo);
+    if (!atual || partes.numeroInt > atual.numeroInt) {
+      porTipo.set(tipo, {
+        tipo,
+        numeroInt: partes.numeroInt,
+        numero: partes.numero,
+        ano: partes.ano || String(p?.ano || ''),
+        ementa: String(p?.ementa || '').trim(),
+        link: String(p?.link || p?.url || p?.fonte || p?.projeto_url || '').trim(),
+        clienteSugestao: Array.isArray(p?.clientesCitados) ? p.clientesCitados.join(', ') : '',
+      });
+    }
+  });
+  return Array.from(porTipo.values());
+}
+
+async function sincronizarRadar03(novas) {
+  const resumo = radar03AgruparNovidades(novas);
+  if (!resumo.length) return;
+  try {
+    const getResp = await fetch(CONTROLE03_STATE_URL, { headers: radar03AuthHeaders() });
+    if (!getResp.ok) throw new Error('GET ' + getResp.status);
+    const state = await getResp.json();
+    if (!Array.isArray(state.data)) throw new Error('estado central vazio ou inválido');
+
+    const data = state.data;
+    let casa = data.find(item => item && item.casa === CASA_RADAR03);
+    if (!casa) {
+      casa = { casa: CASA_RADAR03, casaId: CASA_RADAR03, regiao: 'Sudeste', responsavel: 'maria', risco: 'media', status: 'A conferir', week: ['off', 'off', 'off', 'off', 'off'], items: [] };
+      data.push(casa);
+    }
+    if (!Array.isArray(casa.items)) casa.items = [];
+    if (!Array.isArray(casa.week)) casa.week = ['off', 'off', 'off', 'off', 'off'];
+    while (casa.week.length < 5) casa.week.push('off');
+
+    resumo.forEach(rec => {
+      let item = casa.items.find(i => String(i?.tipo || '').toUpperCase() === rec.tipo);
+      if (!item) {
+        item = { tipo: rec.tipo, base: 0, mon: rec.numeroInt };
+        casa.items.push(item);
+      }
+      const base = Number.parseInt(String(item.base || item.mon || 0), 10) || 0;
+      item.tipo = rec.tipo;
+      item.mon = rec.numeroInt;
+      item.delta = Math.abs(rec.numeroInt - base);
+      item.sentido = rec.numeroInt === base ? 'bate com o controle' : 'fonte/sistema acima';
+      item.fluxo = item.delta ? 'nao_consultado' : (item.fluxo || 'revisado');
+      item.ementa = rec.ementa || item.ementa || '';
+      item.link = rec.link || item.link || '';
+      item.clienteSugestao = rec.clienteSugestao || item.clienteSugestao || '';
+    });
+
+    casa.status = 'Atualizar 03';
+    casa.week[radar03DiaUtilAtual()] = 'leva';
+    if (!Array.isArray(casa.obs03)) casa.obs03 = [];
+    casa.obs03.push({
+      tipo: CASA_RADAR03,
+      situacao: 'novo',
+      label: 'Rodada ALESP sincronizada automaticamente na 03',
+      base: resumo.map(item => item.tipo + ' ' + item.numero + (item.ano ? '/' + item.ano : '')).join(' | '),
+      fonte: 'monitor-proposicoes-sp',
+      at: new Date().toISOString(),
+    });
+
+    const postResp = await fetch(CONTROLE03_STATE_URL, {
+      method: 'POST',
+      headers: radar03AuthHeaders(),
+      body: JSON.stringify({ data }),
+    });
+    if (!postResp.ok) throw new Error('POST ' + postResp.status);
+    console.log('✅ Radar 03 sincronizado: ' + CASA_RADAR03 + ' · ' + resumo.map(item => item.tipo + ' ' + item.numero + '/' + item.ano).join(' | '));
+  } catch (err) {
+    console.warn('⚠️ Não foi possível sincronizar o Radar 03 automaticamente: ' + err.message);
+  }
+}
+
 function radar03ReviewUrl(novas) {
   const params = new URLSearchParams({
     casa: CASA_RADAR03,
@@ -741,6 +874,8 @@ async function enviarEmail(novas, eventosAgenda = []) {
 
   if (novas.length > 0) {
     const agendaAlesp = await carregarAgendaAlesp();
+    anotarClientesCitados(novas);
+    await sincronizarRadar03(novas);
     await enviarEmail(novas, agendaAlesp);
     novas.forEach(p => idsVistos.add(p.id));
     estado.proposicoes_vistas = Array.from(idsVistos);
