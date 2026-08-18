@@ -1,3 +1,13 @@
+const FICHA_URL = process.env.FICHA_URL || 'https://doe.monitorlegislativo.com.br/ficha';
+
+function fichaEmailButtonHtml() {
+  return '<div style="background:#eef6ff;border:1px solid #c7ddf2;border-radius:6px;padding:11px 13px;margin:12px 0;color:#173d63;font-size:13px;line-height:1.45">' +
+    '<strong>Ficha</strong><br>' +
+    '<span>Cole o link oficial de uma proposição para criar ficha e acelerar a revisão/cadastro.</span><br>' +
+    '<a href="' + FICHA_URL + '" style="display:inline-block;background:#0f3d5c;color:white;text-decoration:none;border-radius:4px;padding:8px 11px;font-weight:bold;margin-top:8px">Criar ficha</a>' +
+    '</div>';
+}
+
 const fs = require('fs');
 const { DOMParser } = require('@xmldom/xmldom');
 const AdmZip = require('adm-zip');
@@ -15,6 +25,9 @@ const CONTROLE03_STATE_URL = process.env.CONTROLE03_STATE_URL || new URL('api/st
 const CONTROLE03_API_USER = process.env.CONTROLE03_API_USER || '';
 const CONTROLE03_API_PASS = process.env.CONTROLE03_API_PASS || '';
 const CONTROLE03_BASIC_AUTH = process.env.CONTROLE03_BASIC_AUTH || '';
+const ALESP_API_LOOKBACK_DAYS = Number(process.env.ALESP_API_LOOKBACK_DAYS || 4);
+const ALESP_API_MAX_PAGES = Number(process.env.ALESP_API_MAX_PAGES || 5);
+const ALESP_API_TIMEOUT_MS = Number(process.env.ALESP_API_TIMEOUT_MS || 25000);
 
 
 const URL_PROPOSITURAS = 'https://www.al.sp.gov.br/repositorioDados/processo_legislativo/proposituras.zip';
@@ -23,7 +36,6 @@ const URL_AGENDA_2026 = 'https://www.al.sp.gov.br/repositorioDados/agenda/agenda
 // Regra operacional: listar todos os eventos oficiais publicados na agenda ALESP
 // pelos próximos 60 dias, excluindo reservas/bloqueios internos de sala.
 const DIAS_AGENDA_FRENTE = 60;
-
 function carregarEstado() {
   if (fs.existsSync(ARQUIVO_ESTADO)) {
     return JSON.parse(fs.readFileSync(ARQUIVO_ESTADO, 'utf8'));
@@ -337,6 +349,23 @@ function dataBrParaIso(dataBr) {
   return m[3] + '-' + m[2] + '-' + m[1];
 }
 
+function dataIsoDiasAtras(dias) {
+  const data = new Date();
+  data.setDate(data.getDate() - dias);
+  return [
+    data.getFullYear(),
+    String(data.getMonth() + 1).padStart(2, '0'),
+    String(data.getDate()).padStart(2, '0'),
+  ].join('-');
+}
+
+function normalizarDataAlesp(valor) {
+  const raw = String(valor || '').trim();
+  if (!raw || raw === '-') return '-';
+  if (/^\d{4}-\d{2}-\d{2}/.test(raw)) return raw.slice(0, 10);
+  return dataBrParaIso(raw);
+}
+
 function parsearListagemProposicoes(html, tipoFallback, anoFiltro) {
   const proposicoes = [];
   const regex = /<a class="tituloItem"[^>]+href="\/propositura\/\?id=(\d+)&tipo=(\d+)&ano=(\d+)"[^>]*>\s*([\s\S]*?)\s*<\/a>\s*<br>\s*<p>([\s\S]*?)<\/p>/g;
@@ -362,6 +391,98 @@ function parsearListagemProposicoes(html, tipoFallback, anoFiltro) {
   }
 
   return proposicoes;
+}
+
+function normalizarProposicaoApiAlesp(raw, tipoFallback) {
+  const descricao = String(raw.descricao || '');
+  const parsed = descricao.match(/^(.+?)\s+(\d+)\/(\d{4})$/);
+  const id = String(raw.idProcesso || raw.id || '').trim();
+  const urlProcesso = raw.urlProcesso
+    ? new URL(String(raw.urlProcesso), 'https://www.al.sp.gov.br').href
+    : (id ? 'https://www.al.sp.gov.br/processo/' + id : 'https://www.al.sp.gov.br/propositura/pesquisa/');
+  return {
+    id,
+    tipo: raw.tipoProcesso || (parsed && parsed[1]) || tipoFallback || 'OUTROS',
+    numero: String(raw.numeroTipo || raw.numeroProcesso || (parsed && parsed[2]) || '-'),
+    ano: String(raw.anoTipo || raw.anoProcesso || (parsed && parsed[3]) || ''),
+    data: normalizarDataAlesp(raw.dtPublicacao || raw.dataPublicacao || raw.dataApresentacao),
+    autor: raw.autorPrincipal || raw.nomeAutor || '',
+    ementa: limparHtml(raw.resumo || raw.ementa || '-'),
+    link: urlProcesso,
+    fonte: 'api_nova',
+  };
+}
+
+async function carregarProposicoesApi(ano) {
+  const tipos = [
+    ['1', 'Projeto de Lei'],
+    ['9', 'Indicação'],
+    ['4005', 'Emendas e Substitutivos'],
+    ['4001', 'Anexos'],
+    ['2', 'Projeto de Lei Complementar'],
+    ['6', 'Moção'],
+    ['4000', 'Parecer'],
+    ['18', 'Autógrafo'],
+    ['5', 'Proposta de Emenda à Constituição'],
+    ['7', 'Requerimento'],
+    ['108', 'Proposta de Alteração (Governador)'],
+    ['19', 'Ofício'],
+    ['4', 'Projeto de Decreto Legislativo'],
+    ['8', 'Requerimento de Informação'],
+    ['47', 'Mensagem Aditiva'],
+    ['4002', 'Veto'],
+    ['3', 'Projeto de Resolução'],
+  ];
+  const todas = [];
+  const dtInicio = dataIsoDiasAtras(ALESP_API_LOOKBACK_DAYS);
+  const dtFim = dataIsoDiasAtras(0);
+
+  for (const [tipoId, tipoNome] of tipos) {
+    let totalTipo = 0;
+    for (let page = 0; page < ALESP_API_MAX_PAGES; page++) {
+      const params = new URLSearchParams({
+        page: String(page),
+        size: '100',
+        sort: 'desc',
+        flPropositura: 'true',
+        dtInicio,
+        dtFim,
+      });
+      params.append('listaIdTipoProcesso', tipoId);
+      const url = 'https://legis-api-portal-prd.al.sp.gov.br/processo?' + params.toString();
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), ALESP_API_TIMEOUT_MS);
+      try {
+        const response = await fetch(url, {
+          signal: controller.signal,
+          headers: {
+            Accept: 'application/json',
+            Origin: 'https://www.al.sp.gov.br',
+            Referer: 'https://www.al.sp.gov.br/propositura/pesquisa/',
+          },
+        });
+        if (!response.ok) throw new Error('HTTP ' + response.status);
+        const json = await response.json();
+        const content = Array.isArray(json.content) ? json.content : [];
+        for (const raw of content) {
+          const p = normalizarProposicaoApiAlesp(raw, tipoNome);
+          if (p.id && p.ano === String(ano)) {
+            todas.push(p);
+            totalTipo++;
+          }
+        }
+        if (json.last || content.length === 0) break;
+      } catch (err) {
+        console.warn('⚠️ Falha na API nova ALESP ' + tipoNome + ': ' + err.message);
+        break;
+      } finally {
+        clearTimeout(timeout);
+      }
+    }
+    console.log('🔎 API nova ALESP ' + tipoNome + ': ' + totalTipo + ' item(ns) desde ' + dtInicio);
+  }
+
+  return todas;
 }
 
 async function carregarProposicoesListagem(ano) {
@@ -403,13 +524,41 @@ async function carregarProposicoesListagem(ano) {
 }
 
 function mesclarProposicoes(fontes) {
-  const porId = new Map();
+  const porChave = new Map();
   fontes.flat().forEach(p => {
     if (!p || !p.id) return;
-    const atual = porId.get(p.id);
-    if (!atual || atual.fonte !== 'busca_publica') porId.set(p.id, p);
+    const chave = chaveProposicao(p) || ('id:' + p.id);
+    const atual = porChave.get(chave);
+    const ids = Array.from(new Set([...(atual && atual.ids ? atual.ids : []), p.id]));
+    if (!atual) {
+      porChave.set(chave, { ...p, ids });
+      return;
+    }
+    const prioridade = { busca_publica: 3, api_nova: 2 };
+    const atualScore = prioridade[atual.fonte] || 1;
+    const novoScore = prioridade[p.fonte] || 1;
+    const escolhido = novoScore > atualScore ? { ...atual, ...p } : { ...atual };
+    escolhido.ids = ids;
+    if ((!escolhido.ementa || escolhido.ementa === '-') && p.ementa) escolhido.ementa = p.ementa;
+    if ((!escolhido.link || escolhido.link === '-') && p.link) escolhido.link = p.link;
+    porChave.set(chave, escolhido);
   });
-  return Array.from(porId.values());
+  return Array.from(porChave.values());
+}
+
+function chaveProposicao(p) {
+  const tipo = radar03TipoControle(p && p.tipo);
+  const numero = String((p && p.numero) || '').trim();
+  const ano = String((p && p.ano) || '').trim();
+  if (!tipo || !numero || !ano || numero === '-') return '';
+  return [tipo, numero, ano].join('|');
+}
+
+function proposicaoJaVista(p, idsVistos, chavesVistas) {
+  const ids = Array.isArray(p.ids) && p.ids.length ? p.ids : [p.id];
+  if (ids.some(id => idsVistos.has(String(id)))) return true;
+  const chave = chaveProposicao(p);
+  return Boolean(chave && chavesVistas.has(chave));
 }
 
 function montarSecaoAgenda(agendaAlesp) {
@@ -493,7 +642,7 @@ const CLIENTES_NOMES_PROPRIOS = [
   'Wild Fork', 'Ajinomoto', 'Vibra', 'Vibra Energia',
   'BR Distribuidora', 'Raízen', 'Raizen', 'Mindlab',
   'ABVTEX', 'Semove', 'Barcas', 'Seta',
-  'Nova Infra', 'BRT'
+  'Nova Infra'
 ];
 
 const CLIENTES_INATIVOS_NAO_DESTACAR = [
@@ -925,7 +1074,7 @@ async function enviarEmail(novas, eventosAgenda = []) {
     from: `"Monitor São Paulo" <${EMAIL_REMETENTE}>`,
     to: EMAIL_DESTINO,
     subject: assuntoEmailClienteCitado(novas, `🏛️ São Paulo: ${novas.length} nova(s) proposição(ões) — ${new Date().toLocaleDateString('pt-BR')}`),
-    html,
+    html: fichaEmailButtonHtml() + html,
   });
 
   console.log(`✅ Email enviado com ${novas.length} proposições novas.`);
@@ -937,6 +1086,7 @@ async function enviarEmail(novas, eventosAgenda = []) {
 
   const estado = carregarEstado();
   const idsVistos = new Set(estado.proposicoes_vistas);
+  const chavesVistas = new Set(estado.proposicoes_chaves_vistas || []);
   const ano = new Date().getFullYear();
 
   const naturezas = await carregarNaturezas();
@@ -949,9 +1099,10 @@ async function enviarEmail(novas, eventosAgenda = []) {
     console.warn('⚠️ Falha ao baixar/ler ZIP de proposituras; seguindo com busca pública: ' + err.message);
   }
 
+  const proposicoesApi = await carregarProposicoesApi(ano);
   const proposicoesListagem = await carregarProposicoesListagem(ano);
-  const proposicoes = mesclarProposicoes([proposicoesZip, proposicoesListagem]);
-  console.log('📊 Total consolidado ZIP + busca pública: ' + proposicoes.length);
+  const proposicoes = mesclarProposicoes([proposicoesZip, proposicoesApi, proposicoesListagem]);
+  console.log('📊 Total consolidado ZIP + API nova + busca pública: ' + proposicoes.length);
 
   if (proposicoes.length === 0) {
     console.log('⚠️ Nenhuma proposição encontrada. Verifique o dump 🔬 acima.');
@@ -960,7 +1111,7 @@ async function enviarEmail(novas, eventosAgenda = []) {
     process.exit(0);
   }
 
-  const novas = proposicoes.filter(p => !idsVistos.has(p.id));
+  const novas = proposicoes.filter(p => !proposicaoJaVista(p, idsVistos, chavesVistas));
   console.log(`🆕 Proposições novas: ${novas.length}`);
 
   if (novas.length > 0) {
@@ -968,8 +1119,13 @@ async function enviarEmail(novas, eventosAgenda = []) {
     anotarClientesCitados(novas);
     await sincronizarRadar03(novas);
     await enviarEmail(novas, agendaAlesp);
-    novas.forEach(p => idsVistos.add(p.id));
+    novas.forEach(p => {
+      (Array.isArray(p.ids) && p.ids.length ? p.ids : [p.id]).forEach(id => idsVistos.add(String(id)));
+      const chave = chaveProposicao(p);
+      if (chave) chavesVistas.add(chave);
+    });
     estado.proposicoes_vistas = Array.from(idsVistos);
+    estado.proposicoes_chaves_vistas = Array.from(chavesVistas);
   } else {
     console.log('✅ Sem novidades. Nada a enviar.');
   }
