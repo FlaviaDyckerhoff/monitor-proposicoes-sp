@@ -28,6 +28,7 @@ const CONTROLE03_BASIC_AUTH = process.env.CONTROLE03_BASIC_AUTH || '';
 const ALESP_API_LOOKBACK_DAYS = Number(process.env.ALESP_API_LOOKBACK_DAYS || 4);
 const ALESP_API_MAX_PAGES = Number(process.env.ALESP_API_MAX_PAGES || 5);
 const ALESP_API_TIMEOUT_MS = Number(process.env.ALESP_API_TIMEOUT_MS || 25000);
+const ALESP_ENABLE_ZIP = String(process.env.ALESP_ENABLE_ZIP || '').trim() === '1';
 const ALESP_ENABLE_PUBLIC_LISTAGEM = String(process.env.ALESP_ENABLE_PUBLIC_LISTAGEM || '').trim() === '1';
 
 
@@ -1090,23 +1091,27 @@ async function enviarEmail(novas, eventosAgenda = []) {
   const chavesVistas = new Set(estado.proposicoes_chaves_vistas || []);
   const ano = new Date().getFullYear();
 
-  const naturezas = await carregarNaturezas();
   let proposicoesZip = [];
-  try {
-    const zipBuffer = await baixarBuffer(URL_PROPOSITURAS, 120000);
-    const xmlStr = extrairXmlDoZip(zipBuffer);
-    proposicoesZip = parsearProposicoes(xmlStr, naturezas, ano);
-  } catch (err) {
-    console.warn('⚠️ Falha ao baixar/ler ZIP de proposituras; seguindo com busca pública: ' + err.message);
+  if (ALESP_ENABLE_ZIP) {
+    const naturezas = await carregarNaturezas();
+    try {
+      const zipBuffer = await baixarBuffer(URL_PROPOSITURAS, 120000);
+      const xmlStr = extrairXmlDoZip(zipBuffer);
+      proposicoesZip = parsearProposicoes(xmlStr, naturezas, ano);
+    } catch (err) {
+      console.warn('⚠️ Falha ao baixar/ler ZIP de proposituras; seguindo com API nova: ' + err.message);
+    }
+  } else {
+    console.log('⏭️ ZIP antigo ALESP desativado por padrão; usando API nova.');
   }
 
   const proposicoesApi = await carregarProposicoesApi(ano);
   const proposicoesListagem = ALESP_ENABLE_PUBLIC_LISTAGEM ? await carregarProposicoesListagem(ano) : [];
   if (!ALESP_ENABLE_PUBLIC_LISTAGEM) {
-    console.log('⏭️ Busca pública antiga ALESP desativada por padrão; usando ZIP + API nova.');
+    console.log('⏭️ Busca pública antiga ALESP desativada por padrão; usando fontes principais habilitadas.');
   }
   const proposicoes = mesclarProposicoes([proposicoesZip, proposicoesApi, proposicoesListagem]);
-  console.log('📊 Total consolidado ZIP + API nova + busca pública: ' + proposicoes.length);
+  console.log('📊 Total consolidado ALESP: ' + proposicoes.length);
 
   if (proposicoes.length === 0) {
     console.log('⚠️ Nenhuma proposição encontrada. Verifique o dump 🔬 acima.');
