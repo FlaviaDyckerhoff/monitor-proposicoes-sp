@@ -28,6 +28,7 @@ const CONTROLE03_BASIC_AUTH = process.env.CONTROLE03_BASIC_AUTH || '';
 const ALESP_API_LOOKBACK_DAYS = Number(process.env.ALESP_API_LOOKBACK_DAYS || 4);
 const ALESP_API_MAX_PAGES = Number(process.env.ALESP_API_MAX_PAGES || 5);
 const ALESP_API_TIMEOUT_MS = Number(process.env.ALESP_API_TIMEOUT_MS || 25000);
+const ALESP_ENABLE_PUBLIC_LISTAGEM = String(process.env.ALESP_ENABLE_PUBLIC_LISTAGEM || '').trim() === '1';
 
 
 const URL_PROPOSITURAS = 'https://www.al.sp.gov.br/repositorioDados/processo_legislativo/proposituras.zip';
@@ -1100,7 +1101,10 @@ async function enviarEmail(novas, eventosAgenda = []) {
   }
 
   const proposicoesApi = await carregarProposicoesApi(ano);
-  const proposicoesListagem = await carregarProposicoesListagem(ano);
+  const proposicoesListagem = ALESP_ENABLE_PUBLIC_LISTAGEM ? await carregarProposicoesListagem(ano) : [];
+  if (!ALESP_ENABLE_PUBLIC_LISTAGEM) {
+    console.log('⏭️ Busca pública antiga ALESP desativada por padrão; usando ZIP + API nova.');
+  }
   const proposicoes = mesclarProposicoes([proposicoesZip, proposicoesApi, proposicoesListagem]);
   console.log('📊 Total consolidado ZIP + API nova + busca pública: ' + proposicoes.length);
 
